@@ -4,7 +4,7 @@ from collections.abc import Generator
 from typing import Any, cast
 
 from dify_plugin.entities.agent import AgentInvokeMessage
-from dify_plugin.entities.model.llm import LLMResultChunk, LLMUsage
+from dify_plugin.entities.model.llm import LLMModelConfig, LLMResultChunk, LLMUsage
 from dify_plugin.entities.model.message import (
     AssistantPromptMessage,
     PromptMessage,
@@ -40,6 +40,7 @@ class ReActAgentStrategy(AgentStrategy):
         self, parameters: dict[str, object]
     ) -> Generator[AgentInvokeMessage, None, None]:
         self._model = AgentModelConfig.model_validate(parameters["model"])
+        self._llm_config = LLMModelConfig.model_validate(parameters["model"])
         raw_tools = cast(list[dict[str, Any]] | None, parameters.get("tools"))
         tools = [ToolEntity.model_validate(t) for t in raw_tools] if raw_tools else None
 
@@ -164,7 +165,7 @@ class ReActAgentStrategy(AgentStrategy):
             )
 
         chunks: Generator[LLMResultChunk, None, None] = self.session.model.llm.invoke(
-            model_config=self._model,
+            model_config=self._llm_config,
             prompt_messages=prompt_messages,
             stream=True,
             stop=self._stop_sequences,
@@ -358,7 +359,7 @@ class ReActAgentStrategy(AgentStrategy):
 
         summary_stop = [s for s in self._stop_sequences if s != "Observation"]
         chunks: Generator[LLMResultChunk, None, None] = self.session.model.llm.invoke(
-            model_config=self._model,
+            model_config=self._llm_config,
             prompt_messages=prompt_messages,
             stream=True,
             stop=summary_stop,

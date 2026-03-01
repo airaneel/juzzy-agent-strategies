@@ -8,6 +8,7 @@ from typing import Any, cast
 from dify_plugin.entities.agent import AgentInvokeMessage
 from dify_plugin.entities.model import ModelFeature
 from dify_plugin.entities.model.llm import (
+    LLMModelConfig,
     LLMResult,
     LLMResultChunk,
     LLMUsage,
@@ -52,6 +53,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
         self, parameters: dict[str, object]
     ) -> Generator[AgentInvokeMessage, None, None]:
         self._model = AgentModelConfig.model_validate(parameters["model"])
+        self._llm_config = LLMModelConfig.model_validate(parameters["model"])
         raw_tools = cast(list[dict[str, Any]] | None, parameters.get("tools"))
         tools = [ToolEntity.model_validate(t) for t in raw_tools] if raw_tools else None
 
@@ -205,7 +207,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             else []
         )
         result = self.session.model.llm.invoke(
-            model_config=self._model,
+            model_config=self._llm_config,
             prompt_messages=prompt_messages,
             stop=stop,
             stream=can_stream,
