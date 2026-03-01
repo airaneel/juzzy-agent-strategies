@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[codz]
+*.so
+
+# Virtual environments
+.venv/
+venv/
+
+# Lock files
+uv.lock
+
+# Environment
+.env
+
+# IDE
+.vscode/
+.idea/
+.ruff_cache/
+
+# OS
+.DS_Store
+
+# Dify plugin packages
+*.difypkg
+
+# Claude
+.claude/

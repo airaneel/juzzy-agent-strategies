@@ -1,0 +1,14 @@
+[project]
+name = "juzzy-agent-strategies"
+version = "0.0.32"
+description = "Function Calling and ReAct agent strategies for Dify"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "dify_plugin>=0.5.0,<0.6.0",
+]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.14.2",
+]

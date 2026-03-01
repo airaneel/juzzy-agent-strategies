@@ -1,0 +1,37 @@
+version: 0.0.32
+type: plugin
+author: juzzy
+name: agent
+label:
+  en_US: Agent Strategies
+  ru_RU: Стратегии агента
+created_at: "2025-01-08T15:22:00.000000000Z"
+icon: icon.svg
+description:
+  en_US: Function Calling and ReAct agent strategies for Dify.
+  ru_RU: Стратегии агента Function Calling и ReAct для Dify.
+tags:
+  - agent
+resource:
+  memory: 268435456
+  permission:
+    tool:
+      enabled: true
+    model:
+      enabled: true
+      llm: true
+plugins:
+  agent_strategies:
+    - provider/agent.yaml
+meta:
+  version: 0.0.2
+  arch:
+    - amd64
+    - arm64
+  runner:
+    language: python
+    version: "3.12"
+    entrypoint: main
+  minimum_dify_version: 1.7.0
+privacy: PRIVACY.md
+verified: false

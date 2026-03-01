@@ -1,0 +1,14 @@
+.git/
+__pycache__/
+*.py[codz]
+.venv/
+venv/
+uv.lock
+.vscode/
+.idea/
+.ruff_cache/
+.env
+.DS_Store
+*.difypkg
+.claude/
+CLAUDE.md
