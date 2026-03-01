@@ -1,7 +1,7 @@
 version: 0.0.32
 type: plugin
 author: juzzy
-name: agent
+name: juzzy_agent
 label:
   en_US: Agent Strategies
   ru_RU: Стратегии агента

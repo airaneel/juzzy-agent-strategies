@@ -1,16 +1,16 @@
 identity:
   author: juzzy
-  name: agent
+  name: juzzy_agent
   label:
-    en_US: Agent
-    zh_Hans: Agent
-    pt_BR: Agent
-    ru_RU: Агент
+    en_US: JuzzyAgent
+    zh_Hans: JuzzyAgent
+    pt_BR: JuzzyAgent
+    ru_RU: JuzzyAgent
   description:
-    en_US: Agent
-    zh_Hans: Agent
-    pt_BR: Agent
-    ru_RU: Агент
+    en_US: JuzzyAgent
+    zh_Hans: JuzzyAgent
+    pt_BR: JuzzyAgent
+    ru_RU: JuzzyAgent
   icon: icon.svg
 strategies:
   - strategies/function_calling.yaml
