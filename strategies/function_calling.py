@@ -180,8 +180,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                 log=model_log,
                 data={
                     "response": response,
-                    "tool_name": ";".join(tc.name for tc in tool_calls),
-                    "tool_input": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
+                    "tool_calls": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
                 },
                 metadata=finish_log_metadata(
                     llm_started_at,
