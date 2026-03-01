@@ -4,6 +4,7 @@ import json
 import os
 import time
 from collections.abc import Generator, Iterable
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, NamedTuple, cast
 
@@ -23,8 +24,9 @@ from pydantic import BaseModel
 _WALL_OFFSET = time.time() - time.perf_counter()
 
 
-def perf_to_wall(perf: float) -> float:
-    return perf + _WALL_OFFSET
+def perf_to_wall(perf: float) -> str:
+    ts = perf + _WALL_OFFSET
+    return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
 
 
 def finish_log_metadata(
