@@ -115,7 +115,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             yield self.finish_log_message(
                 log=round_log,
                 data={},
-                metadata=finish_log_metadata(round_started_at, usage=usage),
+                metadata=finish_log_metadata(round_started_at),
             )
 
             if step == max_iterations:

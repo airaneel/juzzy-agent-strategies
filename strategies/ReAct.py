@@ -139,7 +139,7 @@ class ReActAgentStrategy(AgentStrategy):
                 )
             yield self.finish_log_message(
                 log=round_log,
-                metadata=finish_log_metadata(round_started_at, usage=round_usage),
+                metadata=finish_log_metadata(round_started_at),
             )
 
         if needs_summary:
