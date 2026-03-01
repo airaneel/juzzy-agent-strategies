@@ -399,7 +399,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             text = "".join(c.data for c in content)
         else:
             text = str(content)
-        return cls._THINK_PATTERN.sub("", text).strip()
+        return cls._THINK_PATTERN.sub("", text)
 
     @staticmethod
     def _build_assistant_message(
