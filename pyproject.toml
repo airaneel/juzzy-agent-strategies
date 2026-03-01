@@ -1,6 +1,6 @@
 [project]
 name = "juzzy-agent-strategies"
-version = "0.0.33"
+version = "0.0.36"
 description = "Function Calling and ReAct agent strategies for Dify"
 readme = "README.md"
 requires-python = ">=3.12"
