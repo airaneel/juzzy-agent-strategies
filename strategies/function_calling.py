@@ -302,7 +302,6 @@ class _InvocationRunner:
         self.thoughts.extend(
             self._build_tool_messages(tool_calls, tool_responses)
         )
-        yield self._strategy.create_text_message("\n")
 
         return tool_responses
 
