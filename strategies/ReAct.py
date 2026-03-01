@@ -39,8 +39,9 @@ class ReActAgentStrategy(AgentStrategy):
     def _invoke(
         self, parameters: dict[str, object]
     ) -> Generator[AgentInvokeMessage, None, None]:
-        self._model = cast(AgentModelConfig, parameters["model"])
-        tools = cast(list[ToolEntity] | None, parameters.get("tools"))
+        self._model = AgentModelConfig.model_validate(parameters["model"])
+        raw_tools = cast(list[dict[str, Any]] | None, parameters.get("tools"))
+        tools = [ToolEntity.model_validate(t) for t in raw_tools] if raw_tools else None
 
         self._model.completion_params = self._model.completion_params or {}
 
