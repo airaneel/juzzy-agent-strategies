@@ -183,16 +183,6 @@ class ReActAgentStrategy(AgentStrategy):
         )
         answer_buffer = ""
 
-        model_started_at = time.perf_counter()
-        model_log = self.create_log_message(
-            label=f"{self._model.model} Thought",
-            data={},
-            metadata={LogMetadata.STARTED_AT: perf_to_wall(model_started_at), LogMetadata.PROVIDER: self._model.provider},
-            parent=round_log,
-            status=ToolInvokeMessage.LogMessage.LogStatus.START,
-        )
-        yield model_log
-
         for react_chunk in react_chunks:
             if isinstance(react_chunk, AgentScratchpadUnit.Action):
                 unit.agent_response = (unit.agent_response or "") + json.dumps(
@@ -223,24 +213,29 @@ class ReActAgentStrategy(AgentStrategy):
             usage = LLMUsage.empty_usage()  # type: ignore[no-untyped-call]
             usage_dict["usage"] = usage
 
-        # Only include full data in model log when there's an action (tool call).
-        # For the final answer (no action), the round log carries the output
-        # to avoid the SDK duplicating it via parent aggregation.
+        # Only create a Thought child log when there's an action (tool call).
+        # For the final answer the round log carries the output directly,
+        # avoiding the SDK duplicating it via parent-child aggregation.
         if unit.action:
-            action_dict = unit.action.to_dict()
-            model_data: dict[str, Any] = {"thought": unit.thought, **action_dict}
-        else:
-            model_data = {}
+            model_log = self.create_log_message(
+                label=f"{self._model.model} Thought",
+                data={},
+                metadata={LogMetadata.PROVIDER: self._model.provider},
+                parent=round_log,
+                status=ToolInvokeMessage.LogMessage.LogStatus.START,
+            )
+            yield model_log
 
-        yield self.finish_log_message(
-            log=model_log,
-            data=model_data,
-            metadata=finish_log_metadata(
-                model_started_at,
-                provider=self._model.provider,
-                usage=usage_dict["usage"],
-            ),
-        )
+            action_dict = unit.action.to_dict()
+            yield self.finish_log_message(
+                log=model_log,
+                data={"thought": unit.thought, **action_dict},
+                metadata=finish_log_metadata(
+                    time.perf_counter(),
+                    provider=self._model.provider,
+                    usage=usage_dict["usage"],
+                ),
+            )
 
         return unit, answer_buffer, usage_dict["usage"]
 

@@ -155,45 +155,36 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                 prompt_messages,
                 self._model.completion_params,
             )
-        model_started_at = time.perf_counter()
-
-        model_log = self.create_log_message(
-            label=f"{self._model.model} Thought",
-            data={},
-            metadata={
-                LogMetadata.STARTED_AT: perf_to_wall(model_started_at),
-                LogMetadata.PROVIDER: self._model.provider,
-            },
-            parent=round_log,
-            status=ToolInvokeMessage.LogMessage.LogStatus.START,
-        )
-        yield model_log
 
         text_messages, response, tool_calls, usage = self._call_llm(
             prompt_messages, tools=self._prompt_tools
         )
 
-        # Only include full response in model log when there are tool calls.
-        # For the final answer (no tool calls), the round log carries the output
-        # to avoid the SDK duplicating it via parent aggregation.
+        # Only create a Thought child log when there are tool calls.
+        # For the final answer the round log carries the output directly,
+        # avoiding the SDK duplicating it via parent-child aggregation.
         if tool_calls:
-            model_data: dict[str, Any] = {
-                "response": response,
-                "tool_name": ";".join(tc.name for tc in tool_calls),
-                "tool_input": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
-            }
-        else:
-            model_data = {}
-
-        yield self.finish_log_message(
-            log=model_log,
-            data=model_data,
-            metadata=finish_log_metadata(
-                model_started_at,
-                provider=self._model.provider,
-                usage=usage,
-            ),
-        )
+            model_log = self.create_log_message(
+                label=f"{self._model.model} Thought",
+                data={},
+                metadata={LogMetadata.PROVIDER: self._model.provider},
+                parent=round_log,
+                status=ToolInvokeMessage.LogMessage.LogStatus.START,
+            )
+            yield model_log
+            yield self.finish_log_message(
+                log=model_log,
+                data={
+                    "response": response,
+                    "tool_name": ";".join(tc.name for tc in tool_calls),
+                    "tool_input": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
+                },
+                metadata=finish_log_metadata(
+                    time.perf_counter(),
+                    provider=self._model.provider,
+                    usage=usage,
+                ),
+            )
 
         return text_messages, response, tool_calls, usage
 
