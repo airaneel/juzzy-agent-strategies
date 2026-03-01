@@ -156,6 +156,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                 self._model.completion_params,
             )
 
+        llm_started_at = time.perf_counter()
         text_messages, response, tool_calls, usage = self._call_llm(
             prompt_messages, tools=self._prompt_tools
         )
@@ -167,7 +168,10 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             model_log = self.create_log_message(
                 label=f"{self._model.model} Thought",
                 data={},
-                metadata={LogMetadata.PROVIDER: self._model.provider},
+                metadata={
+                    LogMetadata.STARTED_AT: perf_to_wall(llm_started_at),
+                    LogMetadata.PROVIDER: self._model.provider,
+                },
                 parent=round_log,
                 status=ToolInvokeMessage.LogMessage.LogStatus.START,
             )
@@ -180,7 +184,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                     "tool_input": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
                 },
                 metadata=finish_log_metadata(
-                    time.perf_counter(),
+                    llm_started_at,
                     provider=self._model.provider,
                     usage=usage,
                 ),
