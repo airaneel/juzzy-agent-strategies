@@ -20,6 +20,13 @@ from pydantic import BaseModel
 # ---------------------------------------------------------------------------
 
 
+_WALL_OFFSET = time.time() - time.perf_counter()
+
+
+def perf_to_wall(perf: float) -> float:
+    return perf + _WALL_OFFSET
+
+
 def finish_log_metadata(
     started_at: float,
     *,
@@ -30,8 +37,8 @@ def finish_log_metadata(
     now = time.perf_counter()
     total_price = usage.total_price if usage else 0
     meta: dict[LogMetadata, str | int | float | Decimal] = {
-        LogMetadata.STARTED_AT: started_at,
-        LogMetadata.FINISHED_AT: now,
+        LogMetadata.STARTED_AT: perf_to_wall(started_at),
+        LogMetadata.FINISHED_AT: perf_to_wall(now),
         LogMetadata.ELAPSED_TIME: now - started_at,
         LogMetadata.TOTAL_PRICE: total_price,
         LogMetadata.CURRENCY: usage.currency if usage else "",

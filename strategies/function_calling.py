@@ -37,6 +37,7 @@ from strategies._base import (
     emit_final_metadata,
     extract_tool_calls_from_message,
     finish_log_metadata,
+    perf_to_wall,
     process_tool_invoke_responses,
 )
 
@@ -92,7 +93,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             round_log = self.create_log_message(
                 label=f"ROUND {step}",
                 data={},
-                metadata={LogMetadata.STARTED_AT: round_started_at},
+                metadata={LogMetadata.STARTED_AT: perf_to_wall(round_started_at)},
                 status=ToolInvokeMessage.LogMessage.LogStatus.START,
             )
             yield round_log
@@ -162,7 +163,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             label=f"{self._model.model} Thought",
             data={},
             metadata={
-                LogMetadata.STARTED_AT: model_started_at,
+                LogMetadata.STARTED_AT: perf_to_wall(model_started_at),
                 LogMetadata.PROVIDER: self._model.provider,
             },
             parent=round_log,
@@ -271,7 +272,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                 label=f"CALL {tool_call_name}",
                 data={},
                 metadata={
-                    LogMetadata.STARTED_AT: tool_call_started_at,
+                    LogMetadata.STARTED_AT: perf_to_wall(tool_call_started_at),
                     LogMetadata.PROVIDER: tool_provider,
                 },
                 parent=round_log,
@@ -336,7 +337,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             label="FINAL SUMMARY",
             data={},
             metadata={
-                LogMetadata.STARTED_AT: summary_started_at,
+                LogMetadata.STARTED_AT: perf_to_wall(summary_started_at),
                 LogMetadata.PROVIDER: self._model.provider,
             },
             status=ToolInvokeMessage.LogMessage.LogStatus.START,
