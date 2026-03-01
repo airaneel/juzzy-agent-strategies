@@ -58,7 +58,6 @@ class FunctionCallingAgentStrategy(AgentStrategy):
         raw_tools = cast(list[dict[str, Any]] | None, parameters.get("tools"))
         tools = [ToolEntity.model_validate(t) for t in raw_tools] if raw_tools else None
 
-
         self._llm_usage: dict[str, LLMUsage | None] = {"usage": None}
         self._history_messages = self._model.history_prompt_messages
         self._history_messages.insert(
@@ -106,6 +105,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                 yield from text_messages
                 yield self.finish_log_message(
                     log=round_log,
+                    data={"output": response},
                     metadata=finish_log_metadata(round_started_at, usage=usage),
                 )
                 break
@@ -138,9 +138,7 @@ class FunctionCallingAgentStrategy(AgentStrategy):
                     self._tool_instances[prompt_tool.name], prompt_tool
                 )
 
-        yield from emit_final_metadata(
-            self, context, self._llm_usage, usd_to_rub
-        )
+        yield from emit_final_metadata(self, context, self._llm_usage, usd_to_rub)
 
     # ------------------------------------------------------------------
     # Model invocation
@@ -175,13 +173,21 @@ class FunctionCallingAgentStrategy(AgentStrategy):
             prompt_messages, tools=self._prompt_tools
         )
 
-        yield self.finish_log_message(
-            log=model_log,
-            data={
+        # Only include full response in model log when there are tool calls.
+        # For the final answer (no tool calls), the round log carries the output
+        # to avoid the SDK duplicating it via parent aggregation.
+        if tool_calls:
+            model_data: dict[str, Any] = {
                 "response": response,
                 "tool_name": ";".join(tc.name for tc in tool_calls),
                 "tool_input": [{"name": tc.name, "args": tc.args} for tc in tool_calls],
-            },
+            }
+        else:
+            model_data = {}
+
+        yield self.finish_log_message(
+            log=model_log,
+            data=model_data,
             metadata=finish_log_metadata(
                 model_started_at,
                 provider=self._model.provider,

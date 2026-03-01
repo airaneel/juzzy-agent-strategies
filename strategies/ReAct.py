@@ -109,6 +109,7 @@ class ReActAgentStrategy(AgentStrategy):
                 answer_streamed = True
                 yield self.finish_log_message(
                     log=round_log,
+                    data={"output": final_answer},
                     metadata=finish_log_metadata(round_started_at, usage=round_usage),
                 )
                 break
@@ -117,6 +118,7 @@ class ReActAgentStrategy(AgentStrategy):
                 final_answer = self._extract_final_answer(unit.action)
                 yield self.finish_log_message(
                     log=round_log,
+                    data={"output": final_answer},
                     metadata=finish_log_metadata(round_started_at, usage=round_usage),
                 )
                 break
@@ -221,18 +223,22 @@ class ReActAgentStrategy(AgentStrategy):
             usage = LLMUsage.empty_usage()  # type: ignore[no-untyped-call]
             usage_dict["usage"] = usage
 
-        action_dict = (
-            unit.action.to_dict() if unit.action
-            else {"action": unit.agent_response}
-        )
+        # Only include full data in model log when there's an action (tool call).
+        # For the final answer (no action), the round log carries the output
+        # to avoid the SDK duplicating it via parent aggregation.
+        if unit.action:
+            action_dict = unit.action.to_dict()
+            model_data: dict[str, Any] = {"thought": unit.thought, **action_dict}
+        else:
+            model_data = {}
+
         yield self.finish_log_message(
             log=model_log,
-            data={"thought": unit.thought, **action_dict},
+            data=model_data,
             metadata=finish_log_metadata(
                 model_started_at,
                 provider=self._model.provider,
                 usage=usage_dict["usage"],
-
             ),
         )
 
