@@ -4,7 +4,7 @@ from collections.abc import Generator
 from typing import Any, cast
 
 from dify_plugin.entities.agent import AgentInvokeMessage
-from dify_plugin.entities.model.llm import LLMModelConfig, LLMUsage
+from dify_plugin.entities.model.llm import LLMResultChunk, LLMUsage
 from dify_plugin.entities.model.message import (
     AssistantPromptMessage,
     PromptMessage,
@@ -16,20 +16,19 @@ from dify_plugin.entities.tool import (
     ToolParameter,
     ToolProviderType,
 )
+from dify_plugin.entities.provider_config import LogMetadata
 from dify_plugin.interfaces.agent import (
+    AgentModelConfig,
     AgentScratchpadUnit,
     AgentStrategy,
+    ToolEntity,
 )
 from output_parser.cot_output_parser import ReactChunk, ReactState, ReactStreamParser
 from prompt.template import REACT_PROMPT_TEMPLATE
 from strategies._base import (
-    AgentParams,
-    ExecutionMetadata,
-    LogMetadata,
-    UsageAccumulator,
-    build_retriever_resources,
-    build_timing_metadata,
-    create_usage_accumulator,
+    ContextItem,
+    emit_final_metadata,
+    finish_log_metadata,
     process_tool_invoke_responses,
 )
 
@@ -38,63 +37,57 @@ IGNORE_OBSERVATION_PROVIDERS = frozenset(["wenxin"])
 
 class ReActAgentStrategy(AgentStrategy):
     def _invoke(
-        self, parameters: dict[str, Any]
+        self, parameters: dict[str, object]
     ) -> Generator[AgentInvokeMessage, None, None]:
-        yield from _InvocationRunner(
-            self, AgentParams(**parameters)
-        ).run()
+        self._model = cast(AgentModelConfig, parameters["model"])
+        tools = cast(list[ToolEntity] | None, parameters.get("tools"))
 
+        self._model.completion_params = self._model.completion_params or {}
 
-class _InvocationRunner:
-    """Encapsulates state and logic for a single ReAct invocation.
-
-    The strategy instance is used solely for SDK method access (logging, LLM
-    calls, tool invocation).  All mutable per-invocation state lives here.
-    """
-
-    def __init__(
-        self,
-        strategy: ReActAgentStrategy,
-        params: AgentParams,
-    ):
-        self._strategy = strategy
-        self.model = params.model
-        self.model.completion_params = self.model.completion_params or {}
-        self.query = params.query
-        self.instruction = params.instruction
-        self.stop_sequences = (
-            params.model.completion_params.get("stop", [])
-            if params.model.completion_params
+        self._query = cast(str, parameters["query"])
+        self._instruction = cast(str | None, parameters.get("instruction"))
+        self._stop_sequences = (
+            self._model.completion_params.get("stop", [])
+            if self._model.completion_params
             else []
         )
         if (
-            "Observation" not in self.stop_sequences
-            and params.model.provider not in IGNORE_OBSERVATION_PROVIDERS
+            "Observation" not in self._stop_sequences
+            and self._model.provider not in IGNORE_OBSERVATION_PROVIDERS
         ):
-            self.stop_sequences.append("Observation")
-        self.llm_usage: UsageAccumulator = create_usage_accumulator()
-        self.history_messages = params.model.history_prompt_messages
-        self.tool_instances = (
-            {t.identity.name: t for t in params.tools} if params.tools else {}
+            self._stop_sequences.append("Observation")
+        self._llm_usage: dict[str, LLMUsage | None] = {"usage": None}
+        self._history_messages = self._model.history_prompt_messages
+        self._tool_instances = (
+            {t.identity.name: t for t in tools} if tools else {}
         )
-        self.prompt_tools = strategy._init_prompt_tools(params.tools)
-        self.scratchpad: list[AgentScratchpadUnit] = []
-        self._context = params.context
-        self._max_iterations = params.maximum_iterations
-        self._usd_to_rub = params.usd_to_rub
+        self._prompt_tools = self._init_prompt_tools(tools)
+        self._scratchpad: list[AgentScratchpadUnit] = []
+
+        yield from self._run(
+            context=cast(list[ContextItem] | None, parameters.get("context")),
+            max_iterations=cast(int, parameters.get("maximum_iterations", 3)),
+            usd_to_rub=cast(float, parameters.get("usd_to_rub", 0)),
+        )
 
     # ------------------------------------------------------------------
     # Orchestration
     # ------------------------------------------------------------------
 
-    def run(self) -> Generator[AgentInvokeMessage, None, None]:
+    def _run(
+        self,
+        *,
+        context: list[ContextItem] | None,
+        max_iterations: int,
+        usd_to_rub: float,
+    ) -> Generator[AgentInvokeMessage, None, None]:
         final_answer = ""
         answer_streamed = False
         needs_summary = False
 
-        for step in range(1, self._max_iterations + 1):
+        for step in range(1, max_iterations + 1):
             round_started_at = time.perf_counter()
-            round_log = self._strategy.create_log_message(
+            round_log = self.create_log_message(
                 label=f"ROUND {step}",
                 data={},
                 metadata={LogMetadata.STARTED_AT: round_started_at},
@@ -105,63 +98,51 @@ class _InvocationRunner:
             unit, round_answer, round_usage = (
                 yield from self._invoke_and_parse_model(round_log)
             )
-            self.scratchpad.append(unit)
+            self._scratchpad.append(unit)
             final_answer += round_answer
 
             if not unit.action:
-                final_answer = unit.thought
+                final_answer = unit.thought or ""
                 answer_streamed = True
-                yield self._finish_round_log(round_log, unit, round_started_at, round_usage)
+                yield self.finish_log_message(
+                    log=round_log,
+                    metadata=finish_log_metadata(round_started_at, usage=round_usage),
+                )
                 break
 
             if unit.action.action_name.lower() == "final answer":
                 final_answer = self._extract_final_answer(unit.action)
-                yield self._finish_round_log(round_log, unit, round_started_at, round_usage)
+                yield self.finish_log_message(
+                    log=round_log,
+                    metadata=finish_log_metadata(round_started_at, usage=round_usage),
+                )
                 break
 
-            if step == self._max_iterations:
+            if step == max_iterations:
                 needs_summary = True
-                yield self._strategy.finish_log_message(
+                yield self.finish_log_message(
                     log=round_log,
-                    data={
-                        "thought": unit.thought,
-                        "note": f"Max iterations ({self._max_iterations}) reached.",
-                    },
-                    metadata=build_timing_metadata(round_started_at, usage=round_usage, usd_to_rub=self._usd_to_rub),
+                    data={"note": f"Max iterations ({max_iterations}) reached."},
+                    metadata=finish_log_metadata(round_started_at, usage=round_usage),
                 )
                 break
 
             yield from self._invoke_tool(unit, round_log)
-            for pt in self.prompt_tools:
-                self._strategy.update_prompt_message_tool(
-                    self.tool_instances[pt.name], pt
+            for pt in self._prompt_tools:
+                self.update_prompt_message_tool(
+                    self._tool_instances[pt.name], pt
                 )
-            yield self._finish_round_log(round_log, unit, round_started_at, round_usage)
+            yield self.finish_log_message(
+                log=round_log,
+                metadata=finish_log_metadata(round_started_at, usage=round_usage),
+            )
 
         if needs_summary:
             yield from self._run_summary_call()
         elif not answer_streamed and final_answer:
-            yield self._strategy.create_text_message(final_answer)
+            yield self.create_text_message(final_answer)
 
-        yield from self._emit_final_metadata()
-
-    def _finish_round_log(
-        self,
-        round_log: AgentInvokeMessage,
-        unit: AgentScratchpadUnit,
-        started_at: float,
-        usage: LLMUsage | None,
-    ) -> AgentInvokeMessage:
-        return self._strategy.finish_log_message(
-            log=round_log,
-            data={
-                "action_name": unit.action.action_name if unit.action else "",
-                "action_input": unit.action.action_input if unit.action else "",
-                "thought": unit.thought,
-                "observation": unit.observation,
-            },
-            metadata=build_timing_metadata(started_at, usage=usage, usd_to_rub=self._usd_to_rub),
-        )
+        yield from emit_final_metadata(self, context, self._llm_usage, usd_to_rub)
 
     # ------------------------------------------------------------------
     # Model invocation + parsing
@@ -175,27 +156,21 @@ class _InvocationRunner:
         None,
         tuple[AgentScratchpadUnit, str, LLMUsage | None],
     ]:
-        """Invoke LLM, parse ReAct stream.
-
-        Returns (scratchpad_unit, answer_buffer, usage).
-        """
         prompt_messages = self._organize_prompt_messages()
-        if self.model.entity and self.model.completion_params:
-            self._strategy.recalc_llm_max_tokens(
-                self.model.entity, prompt_messages, self.model.completion_params
+        if self._model.entity and self._model.completion_params:
+            self.recalc_llm_max_tokens(
+                self._model.entity, prompt_messages, self._model.completion_params
             )
 
-        chunks = self._strategy.session.model.llm.invoke(
-            model_config=LLMModelConfig(**self.model.model_dump(mode="json")),
+        chunks: Generator[LLMResultChunk, None, None] = self.session.model.llm.invoke(
+            model_config=self._model,
             prompt_messages=prompt_messages,
             stream=True,
-            stop=self.stop_sequences,
+            stop=self._stop_sequences,
         )
 
-        usage_dict: UsageAccumulator = create_usage_accumulator()
-        react_chunks = ReactStreamParser().parse(
-            chunks, usage_dict
-        )
+        usage_dict: dict[str, LLMUsage | None] = {"usage": None}
+        react_chunks = ReactStreamParser().parse(chunks, usage_dict)
 
         unit = AgentScratchpadUnit(
             agent_response="", thought="", action_str="",
@@ -204,13 +179,10 @@ class _InvocationRunner:
         answer_buffer = ""
 
         model_started_at = time.perf_counter()
-        model_log = self._strategy.create_log_message(
-            label=f"{self.model.model} Thought",
+        model_log = self.create_log_message(
+            label=f"{self._model.model} Thought",
             data={},
-            metadata={
-                LogMetadata.STARTED_AT: model_started_at,
-                LogMetadata.PROVIDER: self.model.provider,
-            },
+            metadata={LogMetadata.STARTED_AT: model_started_at, LogMetadata.PROVIDER: self._model.provider},
             parent=round_log,
             status=ToolInvokeMessage.LogMessage.LogStatus.START,
         )
@@ -228,34 +200,36 @@ class _InvocationRunner:
                 if react_chunk.state == ReactState.ANSWER:
                     answer_buffer += react_chunk.content
                 elif react_chunk.state == ReactState.THINKING:
-                    yield self._strategy.create_text_message(react_chunk.content)
+                    yield self.create_text_message(react_chunk.content)
                     unit.agent_response = (unit.agent_response or "") + react_chunk.content
                     unit.thought = (unit.thought or "") + react_chunk.content
                 else:
-                    yield self._strategy.create_text_message(react_chunk.content)
+                    yield self.create_text_message(react_chunk.content)
 
         unit.thought = (
             unit.thought.strip() if unit.thought
             else "I am thinking about how to help you"
         )
 
-        if usage_dict.get("usage") is not None:
-            self._strategy.increase_usage(self.llm_usage, usage_dict["usage"])
+        usage = usage_dict.get("usage")
+        if usage is not None:
+            self.increase_usage(self._llm_usage, usage)
         else:
-            usage_dict["usage"] = LLMUsage.empty_usage()
+            usage = LLMUsage.empty_usage()  # type: ignore[no-untyped-call]
+            usage_dict["usage"] = usage
 
         action_dict = (
             unit.action.to_dict() if unit.action
             else {"action": unit.agent_response}
         )
-        yield self._strategy.finish_log_message(
+        yield self.finish_log_message(
             log=model_log,
             data={"thought": unit.thought, **action_dict},
-            metadata=build_timing_metadata(
+            metadata=finish_log_metadata(
                 model_started_at,
-                provider=self.model.provider,
+                provider=self._model.provider,
                 usage=usage_dict["usage"],
-                usd_to_rub=self._usd_to_rub,
+
             ),
         )
 
@@ -270,20 +244,16 @@ class _InvocationRunner:
         unit: AgentScratchpadUnit,
         round_log: AgentInvokeMessage,
     ) -> Generator[AgentInvokeMessage, None, None]:
-        """Invoke a tool action and update the scratchpad unit."""
         assert unit.action is not None
         tool_name = unit.action.action_name
-        tool_instance = self.tool_instances.get(tool_name)
+        tool_instance = self._tool_instances.get(tool_name)
         tool_started_at = time.perf_counter()
         tool_provider = tool_instance.identity.provider if tool_instance else ""
 
-        tool_log = self._strategy.create_log_message(
+        tool_log = self.create_log_message(
             label=f"CALL {tool_name}",
             data={},
-            metadata={
-                LogMetadata.STARTED_AT: tool_started_at,
-                LogMetadata.PROVIDER: tool_provider,
-            },
+            metadata={LogMetadata.STARTED_AT: tool_started_at, LogMetadata.PROVIDER: tool_provider},
             parent=round_log,
             status=ToolInvokeMessage.LogMessage.LogStatus.START,
         )
@@ -294,22 +264,21 @@ class _InvocationRunner:
         unit.agent_response = response
 
         yield from additional
-        yield self._strategy.finish_log_message(
+        yield self.finish_log_message(
             log=tool_log,
             data={
                 "tool_name": tool_name,
                 "tool_call_args": parameters,
-                "output": response,
+                "response": response,
             },
-            metadata=build_timing_metadata(tool_started_at, provider=tool_provider, usd_to_rub=self._usd_to_rub),
+            metadata=finish_log_metadata(tool_started_at, provider=tool_provider),
         )
 
     def _execute_tool(
         self,
         action: AgentScratchpadUnit.Action,
-    ) -> tuple[str, dict[str, Any] | str, list[ToolInvokeMessage]]:
-        """Execute a single tool call."""
-        tool_instance = self.tool_instances.get(action.action_name)
+    ) -> tuple[str, dict[str, Any] | str, list[AgentInvokeMessage]]:
+        tool_instance = self._tool_instances.get(action.action_name)
         if not tool_instance:
             return (
                 f"there is not a tool named {action.action_name}",
@@ -335,22 +304,22 @@ class _InvocationRunner:
                     {llm_params[0]: tool_call_args} if llm_params else {}
                 )
 
-        tool_call_args = cast(dict[str, Any], tool_call_args)
+        tool_call_args = cast(dict[str, object], tool_call_args)
         invoke_params = {**tool_instance.runtime_parameters, **tool_call_args}
 
         try:
             result, additional = process_tool_invoke_responses(
-                self._strategy.session.tool.invoke(
+                self.session.tool.invoke(
                     provider_type=ToolProviderType(tool_instance.provider_type),
                     provider=tool_instance.identity.provider,
                     tool_name=tool_instance.identity.name,
                     parameters=invoke_params,
                 ),
-                self._strategy,
+                self,
             )
         except Exception as e:
             result = f"tool invoke error: {e!s}"
-            additional = []
+            additional = cast(list[AgentInvokeMessage], [])
 
         return result, invoke_params, additional
 
@@ -359,8 +328,7 @@ class _InvocationRunner:
     # ------------------------------------------------------------------
 
     def _run_summary_call(self) -> Generator[AgentInvokeMessage, None, None]:
-        """Final LLM call when max iterations exceeded."""
-        self.scratchpad.append(
+        self._scratchpad.append(
             AgentScratchpadUnit(
                 agent_response="", thought="", action_str="",
                 observation=(
@@ -373,88 +341,51 @@ class _InvocationRunner:
         )
 
         summary_started_at = time.perf_counter()
-        summary_round_log = self._strategy.create_log_message(
+        summary_log = self.create_log_message(
             label="FINAL SUMMARY",
             data={},
-            metadata={LogMetadata.STARTED_AT: summary_started_at},
+            metadata={LogMetadata.STARTED_AT: summary_started_at, LogMetadata.PROVIDER: self._model.provider},
             status=ToolInvokeMessage.LogMessage.LogStatus.START,
         )
-        yield summary_round_log
-
-        summary_model_log = self._strategy.create_log_message(
-            label=f"{self.model.model} Summary",
-            data={},
-            metadata={
-                LogMetadata.STARTED_AT: summary_started_at,
-                LogMetadata.PROVIDER: self.model.provider,
-            },
-            parent=summary_round_log,
-            status=ToolInvokeMessage.LogMessage.LogStatus.START,
-        )
-        yield summary_model_log
+        yield summary_log
 
         prompt_messages = self._organize_prompt_messages()
-        if self.model.entity and self.model.completion_params:
-            self._strategy.recalc_llm_max_tokens(
-                self.model.entity, prompt_messages, self.model.completion_params
+        if self._model.entity and self._model.completion_params:
+            self.recalc_llm_max_tokens(
+                self._model.entity, prompt_messages, self._model.completion_params
             )
 
-        summary_stop = [s for s in self.stop_sequences if s != "Observation"]
-        chunks = self._strategy.session.model.llm.invoke(
-            model_config=LLMModelConfig(**self.model.model_dump(mode="json")),
+        summary_stop = [s for s in self._stop_sequences if s != "Observation"]
+        chunks: Generator[LLMResultChunk, None, None] = self.session.model.llm.invoke(
+            model_config=self._model,
             prompt_messages=prompt_messages,
             stream=True,
             stop=summary_stop,
         )
 
         response = ""
-        usage_dict: UsageAccumulator = create_usage_accumulator()
-        for react_chunk in ReactStreamParser().parse(
-            chunks, usage_dict
-        ):
+        usage_dict: dict[str, LLMUsage | None] = {"usage": None}
+        for react_chunk in ReactStreamParser().parse(chunks, usage_dict):
             if isinstance(react_chunk, AgentScratchpadUnit.Action):
                 continue
             assert isinstance(react_chunk, ReactChunk)
             response += react_chunk.content
-            yield self._strategy.create_text_message(react_chunk.content)
-
-        if usage_dict.get("usage") is not None:
-            self._strategy.increase_usage(self.llm_usage, usage_dict["usage"])
+            yield self.create_text_message(react_chunk.content)
 
         summary_usage = usage_dict.get("usage")
-        yield self._strategy.finish_log_message(
-            log=summary_model_log,
-            data={"output": response},
-            metadata=build_timing_metadata(
+        if summary_usage is not None:
+            self.increase_usage(self._llm_usage, summary_usage)
+
+        yield self.finish_log_message(
+            log=summary_log,
+            data={"response": response},
+            metadata=finish_log_metadata(
                 summary_started_at,
-                provider=self.model.provider,
-                usage=summary_usage,
-                usd_to_rub=self._usd_to_rub,
+                provider=self._model.provider,
+                usage=usage_dict.get("usage"),
+
             ),
         )
-        yield self._strategy.finish_log_message(
-            log=summary_round_log,
-            data={"output": {"llm_response": response}},
-            metadata=build_timing_metadata(
-                summary_started_at, usage=summary_usage, usd_to_rub=self._usd_to_rub
-            ),
-        )
-
-    # ------------------------------------------------------------------
-    # Finalization
-    # ------------------------------------------------------------------
-
-    def _emit_final_metadata(self) -> Generator[AgentInvokeMessage, None, None]:
-        if isinstance(self._context, list):
-            yield self._strategy.create_retriever_resource_message(
-                retriever_resources=build_retriever_resources(self._context),
-                context="",
-            )
-        yield self._strategy.create_json_message({
-            "execution_metadata": ExecutionMetadata.from_llm_usage(
-                self.llm_usage["usage"], usd_to_rub=self._usd_to_rub
-            ).model_dump()
-        })
 
     # ------------------------------------------------------------------
     # Prompt helpers
@@ -463,29 +394,29 @@ class _InvocationRunner:
     def _build_system_prompt(self) -> SystemPromptMessage:
         system_prompt = (
             REACT_PROMPT_TEMPLATE
-            .replace("{{instruction}}", self.instruction or "")
+            .replace("{{instruction}}", self._instruction or "")
             .replace(
                 "{{tools}}",
                 json.dumps(
-                    [t.model_dump(mode="json") for t in self.prompt_tools]
+                    [t.model_dump(mode="json") for t in self._prompt_tools]
                 ),
             )
             .replace(
                 "{{tool_names}}",
-                ", ".join(t.name for t in self.prompt_tools),
+                ", ".join(t.name for t in self._prompt_tools),
             )
         )
         return SystemPromptMessage(content=system_prompt)
 
     def _organize_prompt_messages(self) -> list[PromptMessage]:
         system_msg = self._build_system_prompt()
-        query_msg = UserPromptMessage(content=self.query)
+        query_msg = UserPromptMessage(content=self._query)
 
-        if not self.scratchpad:
-            return [system_msg, *self.history_messages, query_msg]
+        if not self._scratchpad:
+            return [system_msg, *self._history_messages, query_msg]
 
         assistant_content = ""
-        for unit in self.scratchpad:
+        for unit in self._scratchpad:
             if unit.is_final():
                 assistant_content += f"Final Answer: {unit.agent_response}"
             else:
@@ -497,7 +428,7 @@ class _InvocationRunner:
 
         return [
             system_msg,
-            *self.history_messages,
+            *self._history_messages,
             query_msg,
             AssistantPromptMessage(content=assistant_content),
             UserPromptMessage(content="continue"),

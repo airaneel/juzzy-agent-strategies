@@ -3,31 +3,43 @@
 import json
 import os
 import time
-from collections.abc import Generator
-from typing import Any, TypeVar, cast
+from collections.abc import Generator, Iterable
+from decimal import Decimal
+from typing import Any, NamedTuple, cast
 
+from dify_plugin.entities.agent import AgentInvokeMessage
 from dify_plugin.entities.model.llm import LLMUsage
+from dify_plugin.entities.model.message import AssistantPromptMessage
+from dify_plugin.entities.provider_config import LogMetadata
 from dify_plugin.entities.tool import ToolInvokeMessage
-from dify_plugin.interfaces.agent import AgentModelConfig, AgentStrategy, ToolEntity
-from pydantic import BaseModel, ConfigDict
-
+from dify_plugin.interfaces.agent import AgentStrategy
+from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
-# Constants
+# Log metadata
 # ---------------------------------------------------------------------------
 
 
-class LogMetadata:
-    """Metadata keys for logging."""
-
-    STARTED_AT = "started_at"
-    PROVIDER = "provider"
-    FINISHED_AT = "finished_at"
-    ELAPSED_TIME = "elapsed_time"
-    TOTAL_PRICE = "total_price"
-    TOTAL_PRICE_RUB = "total_price_rub"
-    CURRENCY = "currency"
-    TOTAL_TOKENS = "total_tokens"
+def finish_log_metadata(
+    started_at: float,
+    *,
+    provider: str = "",
+    usage: LLMUsage | None = None,
+) -> dict[LogMetadata, str | int | float | Decimal]:
+    """Build timing + usage metadata dict for finish_log_message calls."""
+    now = time.perf_counter()
+    total_price = usage.total_price if usage else 0
+    meta: dict[LogMetadata, str | int | float | Decimal] = {
+        LogMetadata.STARTED_AT: started_at,
+        LogMetadata.FINISHED_AT: now,
+        LogMetadata.ELAPSED_TIME: now - started_at,
+        LogMetadata.TOTAL_PRICE: total_price,
+        LogMetadata.CURRENCY: usage.currency if usage else "",
+        LogMetadata.TOTAL_TOKENS: usage.total_tokens if usage else 0,
+    }
+    if provider:
+        meta[LogMetadata.PROVIDER] = provider
+    return meta
 
 
 # ---------------------------------------------------------------------------
@@ -41,127 +53,46 @@ class ContextItem(BaseModel):
     metadata: dict[str, Any]
 
 
-class AgentParams(BaseModel):
-    """Common parameters for all agent strategy invocations."""
-
-    query: str
-    instruction: str | None = None
-    model: AgentModelConfig
-    tools: list[ToolEntity] | None = None
-    maximum_iterations: int = 3
-    usd_to_rub: float = 0
-    context: list[ContextItem] | None = None
-
-
-class ExecutionMetadata(BaseModel):
-    """Execution metadata with default values.
-
-    Pydantic v2 coerces Decimal→float automatically based on field types.
-    extra="ignore" filters out fields from LLMUsage that don't exist here.
-    """
-
-    model_config = ConfigDict(extra="ignore")
-
-    total_price: float = 0.0
-    currency: str = ""
-    total_tokens: int = 0
-    prompt_tokens: int = 0
-    prompt_unit_price: float = 0.0
-    prompt_price_unit: float = 0.0
-    prompt_price: float = 0.0
-    completion_tokens: int = 0
-    completion_unit_price: float = 0.0
-    completion_price_unit: float = 0.0
-    completion_price: float = 0.0
-    latency: float = 0.0
-    total_price_rub: float = 0.0
-    prompt_price_rub: float = 0.0
-    completion_price_rub: float = 0.0
-
-    @classmethod
-    def from_llm_usage(
-        cls, usage: LLMUsage | None, *, usd_to_rub: float = 0
-    ) -> "ExecutionMetadata":
-        if usage is None:
-            return cls()
-        meta = cls.model_validate(usage.model_dump())
-        if usd_to_rub > 0:
-            meta.total_price_rub = round(meta.total_price * usd_to_rub, 6)
-            meta.prompt_price_rub = round(meta.prompt_price * usd_to_rub, 6)
-            meta.completion_price_rub = round(meta.completion_price * usd_to_rub, 6)
-        return meta
-
-
-# ---------------------------------------------------------------------------
-# Usage accumulator (required by AgentStrategy.increase_usage() interface)
-# ---------------------------------------------------------------------------
-
-UsageAccumulator = dict[str, LLMUsage | None]
-
-
-def create_usage_accumulator() -> UsageAccumulator:
-    """Create a fresh usage accumulator for AgentStrategy.increase_usage()."""
-    return {"usage": None}
-
-
-# ---------------------------------------------------------------------------
-# Generator helpers
-# ---------------------------------------------------------------------------
-
-_Y = TypeVar("_Y")
-_R = TypeVar("_R")
-
-
-def consume_generator(
-    gen: Generator[_Y, None, _R],
-) -> tuple[list[_Y], _R]:
-    """Consume a generator, collecting yielded items and capturing return value."""
-    items: list[_Y] = []
-    try:
-        while True:
-            items.append(next(gen))
-    except StopIteration as e:
-        return items, e.value
-
-
-# ---------------------------------------------------------------------------
-# Metadata helpers
-# ---------------------------------------------------------------------------
-
-
-def build_usage_metadata(
+def build_execution_metadata(
     usage: LLMUsage | None, *, usd_to_rub: float = 0
-) -> dict[str, Any]:
-    """Build the usage metadata dict, handling None."""
-    total_price = usage.total_price if usage else 0
-    meta = {
-        LogMetadata.TOTAL_PRICE: total_price,
-        LogMetadata.CURRENCY: usage.currency if usage else "",
-        LogMetadata.TOTAL_TOKENS: usage.total_tokens if usage else 0,
-    }
+) -> dict[str, object]:
+    """Dump LLMUsage to dict and add rub price fields."""
+    if usage is None:
+        return {}
+    data: dict[str, object] = usage.model_dump()
     if usd_to_rub > 0:
-        meta[LogMetadata.TOTAL_PRICE_RUB] = round(total_price * usd_to_rub, 6) if total_price else 0
-    return meta
+        data["total_price_rub"] = round(float(usage.total_price) * usd_to_rub, 6)
+        data["prompt_price_rub"] = round(float(usage.prompt_price) * usd_to_rub, 6)
+        data["completion_price_rub"] = round(
+            float(usage.completion_price) * usd_to_rub, 6
+        )
+    return data
 
 
-def build_timing_metadata(
-    started_at: float,
-    *,
-    provider: str = "",
-    usage: LLMUsage | None = None,
-    usd_to_rub: float = 0,
-) -> dict[str, Any]:
-    """Build a full timing + usage metadata dict for finish_log_message calls."""
-    now = time.perf_counter()
-    meta: dict[str, Any] = {
-        LogMetadata.STARTED_AT: started_at,
-        LogMetadata.FINISHED_AT: now,
-        LogMetadata.ELAPSED_TIME: now - started_at,
-    }
-    if provider:
-        meta[LogMetadata.PROVIDER] = provider
-    meta.update(build_usage_metadata(usage, usd_to_rub=usd_to_rub))
-    return meta
+# ---------------------------------------------------------------------------
+# Final metadata (shared by all strategies)
+# ---------------------------------------------------------------------------
+
+
+def emit_final_metadata(
+    strategy: AgentStrategy,
+    context: list["ContextItem"] | None,
+    llm_usage: dict[str, LLMUsage | None],
+    usd_to_rub: float,
+) -> Generator[AgentInvokeMessage, None, None]:
+    """Yield retriever resources and execution metadata at end of invocation."""
+    if isinstance(context, list):
+        yield strategy.create_retriever_resource_message(
+            retriever_resources=build_retriever_resources(context),
+            context="",
+        )
+    yield strategy.create_json_message(
+        {
+            "execution_metadata": build_execution_metadata(
+                llm_usage["usage"], usd_to_rub=usd_to_rub
+            )
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -169,20 +100,22 @@ def build_timing_metadata(
 # ---------------------------------------------------------------------------
 
 
-def extract_tool_calls_from_message(
-    tool_calls_list: list,
-) -> list[tuple[str, str, dict[str, Any]]]:
-    """Extract (tool_call_id, name, args) from AssistantPromptMessage.ToolCall objects.
+class ToolCall(NamedTuple):
+    id: str
+    name: str
+    args: dict[str, object]
 
-    Works for both streaming (.delta.message.tool_calls) and
-    blocking (.message.tool_calls) responses.
-    """
-    result: list[tuple[str, str, dict[str, Any]]] = []
+
+def extract_tool_calls_from_message(
+    tool_calls_list: list[AssistantPromptMessage.ToolCall],
+) -> list[ToolCall]:
+    """Extract parsed ToolCall objects from AssistantPromptMessage.ToolCall list."""
+    result: list[ToolCall] = []
     for tc in tool_calls_list:
-        args: dict[str, Any] = {}
+        args: dict[str, object] = {}
         if tc.function.arguments != "":
             args = json.loads(tc.function.arguments)
-        result.append((tc.id, tc.function.name, args))
+        result.append(ToolCall(id=tc.id, name=tc.function.name, args=args))
     return result
 
 
@@ -192,16 +125,16 @@ def extract_tool_calls_from_message(
 
 
 def process_tool_invoke_responses(
-    responses: Any,
+    responses: Iterable[ToolInvokeMessage],
     strategy: AgentStrategy,
-) -> tuple[str, list[ToolInvokeMessage]]:
+) -> tuple[str, list[AgentInvokeMessage]]:
     """Process tool invoke responses into a text result and additional messages.
 
     Handles TEXT, LINK, IMAGE_LINK, IMAGE, JSON, BLOB message types.
     Returns (result_text, additional_messages_to_yield).
     """
     result = ""
-    additional_messages: list[ToolInvokeMessage] = []
+    additional_messages: list[AgentInvokeMessage] = []
 
     for response in responses:
         msg_type = response.type
@@ -235,7 +168,7 @@ def process_tool_invoke_responses(
                         )
                     except OSError:
                         pass
-            additional_messages.append(response)
+            additional_messages.append(cast(AgentInvokeMessage, response))
             # LLM-facing instruction (not user-facing)
             result += (
                 "image has been created and sent to user already, "
@@ -251,7 +184,7 @@ def process_tool_invoke_responses(
 
         elif msg_type == ToolInvokeMessage.MessageType.BLOB:
             result += "Generated file ... "
-            additional_messages.append(response)
+            additional_messages.append(cast(AgentInvokeMessage, response))
 
         else:
             result += f"tool response: {response.message!r}."

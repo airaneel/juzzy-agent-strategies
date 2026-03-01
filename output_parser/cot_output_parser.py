@@ -4,7 +4,7 @@ from collections.abc import Generator
 from enum import Enum, auto
 from typing import Union
 
-from dify_plugin.entities.model.llm import LLMResultChunk
+from dify_plugin.entities.model.llm import LLMResultChunk, LLMUsage
 from dify_plugin.interfaces.agent import AgentScratchpadUnit
 
 # ---------------------------------------------------------------------------
@@ -128,7 +128,7 @@ class ReactStreamParser:
     regex, and extracts action JSON with ``json.JSONDecoder.raw_decode``.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._buf = ""
         self._state = ReactState.THINKING
         self._in_think = False
@@ -136,7 +136,7 @@ class ReactStreamParser:
     def parse(
         self,
         llm_response: Generator[LLMResultChunk, None, None],
-        usage_dict: dict,
+        usage_dict: dict[str, LLMUsage | None],
     ) -> Generator[Union[ReactChunk, AgentScratchpadUnit.Action], None, None]:
         for chunk in llm_response:
             if chunk.delta.usage:
