@@ -151,7 +151,7 @@ def process_tool_invoke_responses(
 
         elif msg_type == ToolInvokeMessage.MessageType.LINK:
             link_text = cast(ToolInvokeMessage.TextMessage, response.message).text
-            result += f"result link: {link_text}. please tell user to check it."
+            result += link_text
 
         elif msg_type in {
             ToolInvokeMessage.MessageType.IMAGE_LINK,
@@ -187,14 +187,14 @@ def process_tool_invoke_responses(
                 cast(ToolInvokeMessage.JsonMessage, response.message).json_object,
                 ensure_ascii=False,
             )
-            result += f"tool response: {text}."
+            result += text
 
         elif msg_type == ToolInvokeMessage.MessageType.BLOB:
             result += "Generated file ... "
             additional_messages.append(cast(AgentInvokeMessage, response))
 
         else:
-            result += f"tool response: {response.message!r}."
+            result += repr(response.message)
 
     return result, additional_messages
 
