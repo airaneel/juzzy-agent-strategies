@@ -25,6 +25,7 @@ class LogMetadata:
     FINISHED_AT = "finished_at"
     ELAPSED_TIME = "elapsed_time"
     TOTAL_PRICE = "total_price"
+    TOTAL_PRICE_RUB = "total_price_rub"
     CURRENCY = "currency"
     TOTAL_TOKENS = "total_tokens"
 
@@ -48,6 +49,7 @@ class AgentParams(BaseModel):
     model: AgentModelConfig
     tools: list[ToolEntity] | None = None
     maximum_iterations: int = 3
+    usd_to_rub: float = 0
     context: list[ContextItem] | None = None
 
 
@@ -72,12 +74,22 @@ class ExecutionMetadata(BaseModel):
     completion_price_unit: float = 0.0
     completion_price: float = 0.0
     latency: float = 0.0
+    total_price_rub: float = 0.0
+    prompt_price_rub: float = 0.0
+    completion_price_rub: float = 0.0
 
     @classmethod
-    def from_llm_usage(cls, usage: LLMUsage | None) -> "ExecutionMetadata":
+    def from_llm_usage(
+        cls, usage: LLMUsage | None, *, usd_to_rub: float = 0
+    ) -> "ExecutionMetadata":
         if usage is None:
             return cls()
-        return cls.model_validate(usage.model_dump())
+        meta = cls.model_validate(usage.model_dump())
+        if usd_to_rub > 0:
+            meta.total_price_rub = round(meta.total_price * usd_to_rub, 6)
+            meta.prompt_price_rub = round(meta.prompt_price * usd_to_rub, 6)
+            meta.completion_price_rub = round(meta.completion_price * usd_to_rub, 6)
+        return meta
 
 
 # ---------------------------------------------------------------------------
@@ -117,13 +129,19 @@ def consume_generator(
 # ---------------------------------------------------------------------------
 
 
-def build_usage_metadata(usage: LLMUsage | None) -> dict[str, Any]:
-    """Build the 3-field usage metadata dict, handling None."""
-    return {
-        LogMetadata.TOTAL_PRICE: usage.total_price if usage else 0,
+def build_usage_metadata(
+    usage: LLMUsage | None, *, usd_to_rub: float = 0
+) -> dict[str, Any]:
+    """Build the usage metadata dict, handling None."""
+    total_price = usage.total_price if usage else 0
+    meta = {
+        LogMetadata.TOTAL_PRICE: total_price,
         LogMetadata.CURRENCY: usage.currency if usage else "",
         LogMetadata.TOTAL_TOKENS: usage.total_tokens if usage else 0,
     }
+    if usd_to_rub > 0:
+        meta[LogMetadata.TOTAL_PRICE_RUB] = round(total_price * usd_to_rub, 6) if total_price else 0
+    return meta
 
 
 def build_timing_metadata(
@@ -131,6 +149,7 @@ def build_timing_metadata(
     *,
     provider: str = "",
     usage: LLMUsage | None = None,
+    usd_to_rub: float = 0,
 ) -> dict[str, Any]:
     """Build a full timing + usage metadata dict for finish_log_message calls."""
     now = time.perf_counter()
@@ -141,7 +160,7 @@ def build_timing_metadata(
     }
     if provider:
         meta[LogMetadata.PROVIDER] = provider
-    meta.update(build_usage_metadata(usage))
+    meta.update(build_usage_metadata(usage, usd_to_rub=usd_to_rub))
     return meta
 
 

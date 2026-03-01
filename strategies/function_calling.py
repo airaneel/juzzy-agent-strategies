@@ -83,6 +83,7 @@ class _InvocationRunner:
         self.prompt_tools = strategy._init_prompt_tools(params.tools)
         self._context = params.context
         self._max_iterations = params.maximum_iterations
+        self._usd_to_rub = params.usd_to_rub
 
     # ------------------------------------------------------------------
     # Orchestration
@@ -108,7 +109,7 @@ class _InvocationRunner:
                 yield self._strategy.finish_log_message(
                     log=round_log,
                     data={"output": {"llm_response": response, "tool_responses": []}},
-                    metadata=build_timing_metadata(round_started_at, usage=usage),
+                    metadata=build_timing_metadata(round_started_at, usage=usage, usd_to_rub=self._usd_to_rub),
                 )
                 break
 
@@ -119,7 +120,7 @@ class _InvocationRunner:
             yield self._strategy.finish_log_message(
                 log=round_log,
                 data={"output": {"llm_response": response, "tool_responses": tool_responses}},
-                metadata=build_timing_metadata(round_started_at, usage=usage),
+                metadata=build_timing_metadata(round_started_at, usage=usage, usd_to_rub=self._usd_to_rub),
             )
 
             if step == self._max_iterations:
@@ -194,6 +195,7 @@ class _InvocationRunner:
                 model_started_at,
                 provider=self.model.provider,
                 usage=usage,
+                usd_to_rub=self._usd_to_rub,
             ),
         )
 
@@ -363,7 +365,7 @@ class _InvocationRunner:
                 log=tool_call_log,
                 data={"output": tool_response},
                 metadata=build_timing_metadata(
-                    tool_call_started_at, provider=tool_provider
+                    tool_call_started_at, provider=tool_provider, usd_to_rub=self._usd_to_rub
                 ),
             )
             tool_responses.append(tool_response)
@@ -415,13 +417,14 @@ class _InvocationRunner:
                 summary_started_at,
                 provider=self.model.provider,
                 usage=summary_usage,
+                usd_to_rub=self._usd_to_rub,
             ),
         )
         yield self._strategy.finish_log_message(
             log=summary_round_log,
             data={"output": {"llm_response": response}},
             metadata=build_timing_metadata(
-                summary_started_at, usage=summary_usage
+                summary_started_at, usage=summary_usage, usd_to_rub=self._usd_to_rub
             ),
         )
 
@@ -437,7 +440,7 @@ class _InvocationRunner:
             )
         yield self._strategy.create_json_message({
             "execution_metadata": ExecutionMetadata.from_llm_usage(
-                self.llm_usage["usage"]
+                self.llm_usage["usage"], usd_to_rub=self._usd_to_rub
             ).model_dump()
         })
 

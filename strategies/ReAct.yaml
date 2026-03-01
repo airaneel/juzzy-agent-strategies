@@ -71,6 +71,21 @@ parameters:
     default: 3
     min: 1
     max: 30
+  - name: usd_to_rub
+    type: number
+    required: false
+    default: 0
+    label:
+      en_US: USD to RUB rate
+      zh_Hans: USD to RUB rate
+      pt_BR: USD to RUB rate
+      ru_RU: Курс USD → RUB
+    human_description:
+      en_US: Exchange rate for converting USD prices to RUB. Set to 0 to disable RUB calculation.
+      zh_Hans: Exchange rate for converting USD prices to RUB. Set to 0 to disable RUB calculation.
+      pt_BR: Exchange rate for converting USD prices to RUB. Set to 0 to disable RUB calculation.
+      ru_RU: Курс обмена для пересчёта цен из USD в RUB. Установите 0, чтобы отключить расчёт в рублях.
+    form: form
 extra:
   python:
     source: strategies/ReAct.py
